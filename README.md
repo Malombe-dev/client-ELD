@@ -30,5 +30,5 @@ React-based frontend for Electronic Logging Device (ELD) compliance and trip pla
 
 1. **Clone the repository**
    ```bash
-   git clone <your-repo>
+   git clone <https://github.com/Malombe-dev/client-ELD>
    cd client
