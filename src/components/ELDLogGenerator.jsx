@@ -4,150 +4,196 @@ import { MapPin, Truck, Clock, FileText, AlertCircle, Download, Play, Coffee, Mo
 // API Configuration
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || 'http://localhost:8000';
 
-// MapView Component (unchanged)
 const MapView = ({ stops, tripData, currentLocation, statusHistory, className }) => {
   const mapRef = useRef(null);
   const [mapError, setMapError] = useState(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const mapInstanceRef = useRef(null);
+  const markersRef = useRef([]);
 
   useEffect(() => {
+    // Check if Leaflet is already loaded
+    if (window.L && document.getElementById('leaflet-css')) {
+      setMapLoaded(true);
+      return;
+    }
+
+    // Load Leaflet CSS
     if (!document.getElementById('leaflet-css')) {
       const link = document.createElement('link');
       link.id = 'leaflet-css';
       link.rel = 'stylesheet';
       link.href = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.css';
+      link.onload = () => {
+        // Load Leaflet JS after CSS is loaded
+        if (!window.L) {
+          const script = document.createElement('script');
+          script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
+          script.onload = () => {
+            // Small delay to ensure Leaflet is fully initialized
+            setTimeout(() => setMapLoaded(true), 100);
+          };
+          script.onerror = () => setMapError('Failed to load map library');
+          document.head.appendChild(script);
+        } else {
+          setMapLoaded(true);
+        }
+      };
       document.head.appendChild(link);
-    }
-
-    if (!window.L) {
-      const script = document.createElement('script');
-      script.src = 'https://unpkg.com/leaflet@1.9.4/dist/leaflet.js';
-      script.onload = () => setMapLoaded(true);
-      script.onerror = () => setMapError('Failed to load map library');
-      document.head.appendChild(script);
-    } else {
-      setMapLoaded(true);
     }
   }, []);
 
   useEffect(() => {
     if (!mapLoaded || !window.L || !mapRef.current) return;
 
-    try {
-      if (mapInstanceRef.current) {
-        mapInstanceRef.current.remove();
-      }
+    // Clear existing map
+    if (mapInstanceRef.current) {
+      mapInstanceRef.current.remove();
+      mapInstanceRef.current = null;
+    }
 
+    try {
+      // Initialize map
       const map = window.L.map(mapRef.current).setView([39.8283, -98.5795], 4);
       mapInstanceRef.current = map;
 
+      // Add tile layer
       window.L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
         attribution: '© OpenStreetMap contributors',
         maxZoom: 19
       }).addTo(map);
 
-      const geocodeAndAddMarkers = async () => {
-        const locations = [];
-        
-        if (currentLocation) {
-          const coords = await geocodeLocation(currentLocation);
+      // Add markers after map is ready
+      setTimeout(() => {
+        addMarkersToMap(map);
+      }, 100);
+
+    } catch (error) {
+      console.error('Map initialization error:', error);
+      setMapError('Failed to initialize map');
+    }
+
+    return () => {
+      if (mapInstanceRef.current) {
+        mapInstanceRef.current.remove();
+        mapInstanceRef.current = null;
+      }
+    };
+  }, [mapLoaded]);
+
+  const addMarkersToMap = async (map) => {
+    if (!map) return;
+
+    // Clear existing markers
+    markersRef.current.forEach(marker => {
+      if (marker && map) {
+        map.removeLayer(marker);
+      }
+    });
+    markersRef.current = [];
+
+    const locations = [];
+    const bounds = [];
+    const routeCoords = [];
+
+    // Add current location marker
+    if (currentLocation) {
+      const coords = await geocodeLocation(currentLocation);
+      if (coords) {
+        locations.push({
+          coords,
+          title: '📍 Current Position',
+          type: 'current',
+          popup: `<strong>Current Location</strong><br/>${currentLocation}`
+        });
+      }
+    }
+
+    // Add stops from route data
+    if (stops && Array.isArray(stops)) {
+      for (const stop of stops) {
+        if (stop.location) {
+          const coords = await geocodeLocation(stop.location);
           if (coords) {
             locations.push({
               coords,
-              title: '📍 Current Position',
-              type: 'current',
-              popup: `<strong>Current Location</strong><br/>${currentLocation}`
+              title: stop.title || stop.type,
+              type: stop.type,
+              popup: `<strong>${stop.title || stop.type}</strong><br/>${stop.location}<br/><em>${stop.time || ''}</em>`
             });
           }
         }
-
-        if (stops && Array.isArray(stops)) {
-          for (const stop of stops) {
-            const coords = await geocodeLocation(stop.location);
-            if (coords) {
-              locations.push({
-                coords,
-                title: stop.title,
-                type: stop.type,
-                popup: `<strong>${stop.title}</strong><br/>${stop.location}<br/><em>${stop.time || ''}</em>`
-              });
-            }
-          }
-        } else if (tripData) {
-          const locationsList = [
-            { location: tripData.currentLocation, title: '🚦 Start', type: 'start' },
-            { location: tripData.pickupLocation, title: '📦 Pickup', type: 'pickup' },
-            { location: tripData.dropoffLocation, title: '📍 Dropoff', type: 'dropoff' }
-          ];
-
-          for (const loc of locationsList) {
-            if (loc.location) {
-              const coords = await geocodeLocation(loc.location);
-              if (coords) {
-                locations.push({
-                  coords,
-                  title: loc.title,
-                  type: loc.type,
-                  popup: `<strong>${loc.title}</strong><br/>${loc.location}`
-                });
-              }
-            }
-          }
-        }
-
-        if (locations.length > 0) {
-          const bounds = [];
-          const routeCoords = [];
-
-          locations.forEach((loc, index) => {
-            const icon = getMarkerIcon(loc.type);
-            const marker = window.L.marker(loc.coords, { icon }).addTo(map);
-            marker.bindPopup(loc.popup);
-            bounds.push(loc.coords);
-            routeCoords.push(loc.coords);
-
-            if (index > 0 && loc.type !== 'current') {
-              window.L.marker(loc.coords, {
-                icon: window.L.divIcon({
-                  className: 'custom-number-icon',
-                  html: `<div style="background: white; border: 2px solid #4F46E5; border-radius: 50%; width: 26px; height: 26px; display: flex; align-items: center; justify-content: center; font-weight: bold; color: #4F46E5; box-shadow: 0 2px 4px rgba(0,0,0,0.2);">${index}</div>`,
-                  iconSize: [26, 26]
-                })
-              }).addTo(map);
-            }
-          });
-
-          if (routeCoords.length > 1) {
-            window.L.polyline(routeCoords, {
-              color: '#4F46E5',
-              weight: 5,
-              opacity: 0.8,
-              dashArray: '10, 10',
-              lineJoin: 'round'
-            }).addTo(map);
-          }
-
-          if (bounds.length > 0) {
-            map.fitBounds(bounds, { padding: [60, 60] });
-          }
-        }
-      };
-
-      geocodeAndAddMarkers();
-
-      return () => {
-        if (mapInstanceRef.current) {
-          mapInstanceRef.current.remove();
-          mapInstanceRef.current = null;
-        }
-      };
-    } catch (error) {
-      console.error('Map error:', error);
-      setMapError('Failed to initialize map');
+      }
     }
-  }, [mapLoaded, stops, tripData, currentLocation, statusHistory]);
 
+    // Add basic trip locations if no stops
+    if (locations.length === 0 && tripData) {
+      const locationsList = [
+        { location: tripData.currentLocation, title: '🚦 Start', type: 'start' },
+        { location: tripData.pickupLocation, title: '📦 Pickup', type: 'pickup' },
+        { location: tripData.dropoffLocation, title: '📍 Dropoff', type: 'dropoff' }
+      ];
+
+      for (const loc of locationsList) {
+        if (loc.location) {
+          const coords = await geocodeLocation(loc.location);
+          if (coords) {
+            locations.push({
+              coords,
+              title: loc.title,
+              type: loc.type,
+              popup: `<strong>${loc.title}</strong><br/>${loc.location}`
+            });
+          }
+        }
+      }
+    }
+
+    // Add markers to map
+    locations.forEach((loc, index) => {
+      try {
+        const icon = getMarkerIcon(loc.type);
+        const marker = window.L.marker(loc.coords, { icon }).addTo(map);
+        
+        if (loc.popup) {
+          marker.bindPopup(loc.popup);
+        }
+        
+        bounds.push(loc.coords);
+        routeCoords.push(loc.coords);
+        markersRef.current.push(marker);
+
+      } catch (error) {
+        console.error('Error adding marker:', error);
+      }
+    });
+
+    // Add route polyline
+    if (routeCoords.length > 1) {
+      try {
+        const polyline = window.L.polyline(routeCoords, {
+          color: '#4F46E5',
+          weight: 5,
+          opacity: 0.8,
+          lineJoin: 'round'
+        }).addTo(map);
+        markersRef.current.push(polyline);
+      } catch (error) {
+        console.error('Error adding polyline:', error);
+      }
+    }
+
+    // Fit map bounds
+    if (bounds.length > 0) {
+      try {
+        map.fitBounds(bounds, { padding: [60, 60] });
+      } catch (error) {
+        console.error('Error fitting bounds:', error);
+      }
+    }
+  };
+
+  // Rest of your MapView component (geocodeLocation, getMarkerIcon, etc.) remains the same...
   const geocodeLocation = async (location) => {
     if (!location) return null;
     
@@ -189,6 +235,7 @@ const MapView = ({ stops, tripData, currentLocation, statusHistory, className })
     });
   };
 
+  // Rest of the component (error handling, loading, etc.) remains the same...
   if (mapError) {
     return (
       <div className={`${className} flex items-center justify-center bg-gradient-to-br from-gray-50 to-gray-100 rounded-2xl border-2 border-gray-200`}>
@@ -1296,7 +1343,7 @@ function RouteDisplay({ routeData, tripData }) {
         <h2 className="text-3xl font-bold bg-gradient-to-r from-indigo-600 to-purple-600 bg-clip-text text-transparent mb-6">Route Summary</h2>
         
         <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-          <StatCard label="Total Distance" value={`${routeData.totalDistance || '0'} miles`} icon="🛣️" />
+          <StatCard label="Total Distance" value={`${routeData.totalDistance || '0'}`} icon="🛣️" />
           <StatCard label="Total Duration" value={routeData.totalDuration || '0h'} icon="⏱️" />
           <StatCard label="Driving Time" value={routeData.drivingTime || '0h'} icon="🚚" />
           <StatCard label="Rest Time" value={routeData.restTime || '0h'} icon="🛌" />
