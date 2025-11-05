@@ -283,7 +283,7 @@ This project is licensed under the MIT License.
 
 For issues or questions:
 - Open an issue on GitHub
-- Contact: [your-email@example.com]
+- Contact: [vincentmutinda560@gmail.com]
 
 ## 🎥 Demo
 
